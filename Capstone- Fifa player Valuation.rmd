@@ -2,7 +2,8 @@
 title: "Fifa 19 Player Valuation prediction Project - Capstone"
 author: "Rishabh Babeley - Harvard Data Science Professional"
 date: "May 24, 2019"
-Project Overview: "This project is a submission as a requirement in the Professional Certificate in Data Science course on eDX.The dataset used for this analysis has been picked from Kaggle.However the complete analysis has been performed by myself. "
+Project Overview: "This project is a submission as a requirement in the Professional Certificate in Data Science course on eDX.The dataset used for this analysis has been picked from Kaggle.However the complete analysis has been performed by myself.
+The data.csv file for this code can be found on my github repo - https://github.com/rishabh-iitbhu/Capstone-Player-Valuation "
 output:
   pdf_document: default
   word_document: default
