@@ -1,0 +1,464 @@
+---
+title: "Fifa 19 Player Valuation prediction Project - Capstone"
+author: "Rishabh Babeley - Harvard Data Science Professional"
+date: "May 24, 2019"
+Project Overview: "This project is a submission as a requirement in the Professional Certificate in Data Science course on eDX.The dataset used for this analysis has been picked from Kaggle.However the complete analysis has been performed by myself. "
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align = 'center')
+```
+
+```{r include=FALSE}
+# Install all needed libraries if it is not present
+
+if(!require(tidyverse)) install.packages("tidyverse") 
+if(!require(kableExtra)) install.packages("kableExtra")
+if(!require(tidyr)) install.packages("tidyr")
+if(!require(tidyverse)) install.packages("tidyverse")
+if(!require(stringr)) install.packages("stringr")
+if(!require(ggplot2)) install.packages("ggplot2")
+if(!require(gbm)) install.packages("gbm")
+if(!require(dplyr)) install.packages("dplyr")
+if(!require(caret)) install.packages("caret")
+if(!require(xgboost)) install.packages("xgboost")
+if(!require(e1071)) install.packages("e1071")
+if(!require(class)) install.packages("class")
+if(!require(ROCR)) install.packages("ROCR")
+if(!require(randomForest)) install.packages("randomForest")
+if(!require(PRROC)) install.packages("PRROC")
+if(!require(reshape2)) install.packages("reshape2")
+```
+
+```{r include=FALSE}
+# Loading all needed libraries
+
+library(dplyr)
+library(tidyverse)
+library(kableExtra)
+library(tidyr)
+library(ggplot2)
+library(gbm)
+library(caret)
+library(xgboost)
+library(class)
+library(ROCR)
+library(randomForest)
+library(PRROC)
+library(reshape2)
+library(ggthemes)
+```
+
+# Abstract
+
+The Fifa dataset is a very comprehensive dataset which contains a lot of attibutes of footballers from a lot of clubs and leagues around the world.It provides us an opportunity to delve deep inside these attributes and try to understand what is it exactly that determines a players current valuation.
+
+The purpose if the project is to predict the Valuation of a Player in the dataset using some of his improtant attributes with a decent level of accuracy.Preferably an RMSE of less than 
+# Exploratory Data Analysis
+
+## The Dataset
+
+```{r}
+## Loading the dataset
+players_data <- read.csv("data.csv")
+# Check dimensions
+dim(players_data)
+head(players_data)
+```
+
+Taking a look at the first 6 rows we can see that there are many columns which we might not require in our analysis.
+
+```{r}
+# Removing unwanted columns
+colnames(players_data)
+players_data_filtered <- players_data[,-c(29:54)]
+players_data_filtered <- players_data_filtered[,-c(1,5,7,63)]
+colnames(players_data_filtered)
+
+
+# Checking for NAs in the data 
+sapply(players_data_filtered, function(x) sum(is.na (x)))
+
+```
+
+Since we want a comprehensive data for our analysis we can either drop the columns with the NA's or use only the rows for which data is present in all the columns.
+
+```{r}
+# Removing columns with NA values
+
+players_data_filtered<-players_data_filtered %>%
+                        select_if(~ !any(is.na(.)))
+
+```
+
+There are still a lot of columns that we might not end up using but let's keep them as of now for exploratory purposes. Let's visulaize the current data and gather some insights first.
+
+\newpage
+
+# Data Visualization
+
+Let's see how the Overall ratings are distributed with a Histogram . 
+
+```{r, fig.height = 7}
+# Distribution of Overall ratings
+
+  ggplot(players_data_filtered,aes(Overall))+theme_solarized_2(light=FALSE)+
+    geom_histogram(color="blue",binwidth = 0.2)
+  
+```
+
+Although Football is a global sport with presense in almost all countries, there are some countries whose players have valuation predominantly higher that others. Let us explore this.
+
+```{r}
+players_data_filtered$Value <- as.numeric(players_data_filtered$Value)
+
+Valuation_by_country<-players_data_filtered %>% group_by(Nationality) %>% summarise(Valuation_by_country=sum(Value)) 
+
+# Top 10 countries with largest valuations 
+  Valuation_by_country[order(-Valuation_by_country$Valuation_by_country),] %>% head(10) %>%
+    ggplot(aes(Nationality,Valuation_by_country)) + geom_bar(stat="identity", fill="red")+
+  theme_minimal()
+  
+```
+
+Now let us look at the dependence of playing poition on valuation.
+
+
+```{r}
+
+Position_category<-players_data_filtered %>%  mutate(Playing_position_Category="Attacker",Playing_position_Category=if_else(.$Position==c('RWB','RB','RCB','CB','LCB','LB','LWB'),"Defender",if_else(                                                                                           .$Position==c('RM','CM','LM','CDM','RDM','LDM','RAM','CAM','LAM') ,"Midfielder",Playing_position_Category)))                                                      
+
+ggplot(Position_category ,aes(Playing_position_Category,Value))+geom_boxplot()+
+  scale_color_brewer(palette="Dark2")
+
+```
+
+This representation tells us that the Valuation of Attackers overall is higher than both the other categories. 
+We can still dig deeper into sub-categories of these.
+
+```{r}
+ggplot(Position_category ,aes(Position,Value))+geom_boxplot()+
+  scale_color_brewer(palette="Dark2")
+
+```
+
+This boxplot tells us that some playing positions have much higher valuations that others.
+
+
+\newpage
+
+Now lets look at the dependence of Player's age on his overall rating and valuation
+
+```{r}
+ggplot(players_data_filtered,aes(Age,Overall))+geom_bar(stat="identity")
+ggplot(players_data_filtered,aes(Age,Value))+geom_bar(stat="identity")
+
+```
+
+We can conclude from these graph that on an broader scale ,most players reach their peak overall
+performance at the age of 26-27 and decreases after that.
+
+# Data Pre-Processing
+
+Now let us proceed towards building our models.We will first make testing and training datasets.
+
+
+```{r include=FALSE}
+# Set seed for reproducibility
+
+set.seed(1000)
+
+
+
+players_data_filtered$Value <- as.numeric(players_data_filtered$Value)
+players_data_filtered$Age <- as.numeric(as.character(players_data_filtered$Age))
+players_data_filtered$Work.Rate <- as.numeric(players_data_filtered$Work.Rate)
+
+
+# Choosing a subset of improtant variables to run the analysis on
+
+players_data_subset<-players_data_filtered[,c("Value","Overall","Potential",
+                                              "Work.Rate","Age","Position")]
+
+
+
+# Split the dataset into train, test dataset and cv
+
+train_index <- createDataPartition(y = players_data_subset$Value,p = .8,list = F)
+
+train <- players_data_subset[train_index,]
+
+test <- players_data_subset[-train_index,]
+
+test_index <- createDataPartition(
+  y = test$Value, 
+  p = .5, 
+  list = F)
+test_cv <- test[-test_index,]
+
+rm(train_index, test_index)
+```
+
+## We define the RMSE function as following: ##
+RMSE <- function(true_ratings = NULL, predicted_ratings = NULL) {
+    sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+
+# Analysis - Models Building and Comparison
+
+# Random Forest 
+
+Random forests or random decision forests are an ensemble learning method for classification, regression and other tasks that operates by constructing a multitude of decision trees at training time and outputting the class that is the mode of the classes (classification) or mean prediction (regression) of the individual trees. Random decision forests correct for decision trees' habit of overfitting to their training set.
+                                                                                                                                                                                                          
+
+```{r}
+# Set seed 1234 for reproducibility
+
+set.seed(1234)
+
+# Build a Random Forest Model with Value as Target and all other
+# variables as predictors. The number of trees is set to 500
+
+
+rf_model <- randomForest(Value ~ ., data = train, ntree = 500,proximity=TRUE)
+
+  # Get the feature importance
+
+feature_imp_rf <- data.frame(importance(rf_model))
+
+# Make predictions based on this model
+
+predictions <- predict(rf_model, newdata=test)
+
+errors = abs(predictions - test$Value)
+
+#Calculating the Root MEan Squared Error
+
+rmse<-RMSE(test$Value,predictions)
+
+# Adding the respective metrics to the results dataset
+
+
+results<-data.frame(Model=as.character(),rmse=as.double())
+results <- results %>% add_row(
+  Model = "Random Forest",
+  rmse = rmse )
+
+# Show results on a table
+
+results %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed","responsive"),
+      position = "center",
+      font_size = 10,
+      full_width = FALSE)
+
+# Show feature importance on a table
+varImpPlot(rf_model)
+
+```
+
+Thus our Random forest algorithm gave an RMSE of **0.8350321** predicting the Value of a player using Overall rating,Potential,Work Rate, age and Position. This can be considered a is a good prediction.Although it is good enough we can further refine and stablize our model if we want using cross validation. 
+
+Taking a look at the feature importance table the Overall rating and the Potential are way more important variables to predict the Value of a player.
+
+We now come on to a different machine learning algorithm which is Support Vector Machines. 
+
+\newpage
+
+
+# SVM - Support Vector Machines
+
+"Support Vector Machine" (SVM) is a supervised machine learning algorithm which can be used for both classification or regression challenges.In this algorithm, we plot each data item as a point in n-dimensional space (where n is number of features you have) with the value of each feature being the value of a particular coordinate. Then, we find the hyper-plane that differentiate the two classes very well.               
+                                                                                    
+Here we are building an SVM model cost function 1000, gamma 0.01. Here we are performing Cross Validation 
+of 2 fold is being performed in order to avoid overfitting and increase stability.                                                                                  
+
+```{r}
+# Set seed 1234 for reproducibility
+set.seed(1234)
+
+# Build a SVM Model with Value as Target and all other
+# variables as predictors. The kernel is set to default which is linear
+#Cross Validation of 2 fold is being performed in order to avoid overfitting and increase stability.
+svm_model <- svm(Value ~ ., data = train,cost=1000,gamma=0.01,cross=2)
+
+# Make predictions based on this model
+
+predictions <- predict(svm_model, newdata=test)
+
+rmse=RMSE(test$Value,predictions)
+
+# Adding the respective metrics to the results dataset
+
+results <- results %>% add_row(
+  Model = "SVM Result",
+  rmse = rmse )
+
+# Show results on a table
+
+results %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed",           "responsive"),
+      position = "center",
+      font_size = 10,
+      full_width = FALSE)
+```
+
+
+The SVM Model with a default linear Kernel is a big a step back as it has a Root mean squared error of **1.4996891** which is larger as compared to Random Forest.This is the case even after applying 2 fold cross validation.Thus SVM , although is a fast method does not produce satisfactory results for us.
+
+We thus move on to our next method which is XGBoost.
+
+
+\newpage
+
+# XGBoost
+
+XGBoost is a decision-tree-based ensemble Machine Learning algorithm that uses a gradient boosting framework. In prediction problems involving unstructured data (images, text, etc.) artificial neural networks tend to outperform all other algorithms or frameworks. However, when it comes to small-to-medium structured/tabular data, decision tree based algorithms are considered best-in-class right now.
+
+XGBoost are a top class model. It always stays on TOP5 (or wins them) in every competitions on Kaggle and in this case, its' very fast to train and its performance are awesome. 
+
+Here we perform XGBoost training with cross validation and try to see if this method gives us a better result. 
+
+```{r}
+# Set seet 1234 for reproducibility
+
+set.seed(1234)
+
+# Prepare the training dataset
+
+xgb_train <- xgb.DMatrix(
+  as.matrix(train[, colnames(train) != c("Value","Position")]), 
+  label = train$Value)
+
+
+# Prepare the test dataset
+
+xgb_test <- xgb.DMatrix(
+  as.matrix(test[, colnames(test) != c("Value","Position")]), 
+  label = test$Value)
+
+
+test_cv<-test[1:1000,]
+
+# Prepare the cv dataset
+
+xgb_cv <- xgb.DMatrix(
+  as.matrix(test_cv[, colnames(test_cv) != c("Value","Position")]), 
+  label = test_cv$Value)
+
+
+# Prepare the parameters list. 
+
+xgb_params <- list(
+  eta = 0.01, 
+  max.depth = 5, 
+  nthread = 6
+)
+
+# Train the XGBoost Model
+
+xgb_model <- xgb.train(
+  data = xgb_train, 
+  params = xgb_params, 
+  watchlist = list(test = xgb_test, cv = xgb_cv), 
+  nrounds = 1000, 
+  early_stopping_rounds = 20,
+  print_every_n = 50
+)
+
+# Get feature importance
+
+feature_imp_xgb <- xgb.importance(colnames(train), model = xgb_model)
+
+xgb.plot.importance(feature_imp_xgb, rel_to_first = TRUE, xlab = "Relative importance")
+
+# Make predictions based on this model
+
+predictions_xgboost = predict(
+  xgb_model, 
+  newdata = as.matrix(test[, colnames(test) != c("Value","Position")]), 
+  ntreelimit = xgb_model$bestInd
+)
+
+errors_xgboost = abs(predictions_xgboost - test$Value)
+
+#Calculating the Mean Absolute percentage Error
+
+rmse=RMSE(test$Value,predictions_xgboost)
+
+# Adding the respective metrics to the results dataset
+
+results <- results %>% add_row(
+  Model = "XG_BOOST",
+  rmse = rmse )
+
+
+# Show feature importance on a table
+
+feature_imp_xgb %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed","responsive"),
+      position = "center",
+      font_size = 10,
+      full_width = FALSE)
+```
+
+The above analysis with XG-Boost with Cross validation suggests that is method is much superior to both our above methods.It gives us an RMSE of **0.7056808**.This shows its superiority over other tree based methods.
+
+\newpage
+
+# Results
+
+This is the summary results for all the models builted, trained and validated.
+
+```{r include=FALSE}
+# Shows the results
+
+results %>% 
+   kable() %>%
+   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+             position = "center",
+             font_size = 10,
+             full_width = FALSE)
+```
+
+# Conclusion
+
+We started out with exploring out dataset which contained many attributes of a player and his valuation at that point of time. We built some graphs, plots and tables to gather some insights.
+
+We saw that the distribution of the Overall rating was normal.We then saw that some countries have players who have much higher combined valuation that other countries. 
+
+We observerved that the Attackers we on an average valued more that other categories this was also somewhat expected.Although there were some intresting patterns on how various sub - positions were valued compared to others.
+
+We then saw that at about the age of 26-27 a player generally reaches his peakperformance , which then devaluates.
+
+We then moved on to our models.We started out by running Random Forest Regression and and got a decent RMSE value of **0.8350321** which can be considered acceptable and concluded that Random Forest can be a good way of valuating players.
+
+We also ploted the feature importances here to see which variables are most important.
+
+We then tried out the Support Vector Machines algorithm with cross validation.This gave us an RMSE of **1.4996891**.This was not a satisfactory performance.
+
+Finally we delved into the XGBoost algorithm with cross validation.XGBoost outperformed both our previous 
+algorithms and gave us an RMSE of **0.7056808**.This demostrated its superiority and usability to predict the valuation if players.
+
+\newpage
+
+# Appendix
+
+## Acknowledgements
+
+Sources
+
+1.Wikipedia
+
+2.www.towardsdatascience.com
+
+3.www.analyticsvidhya.com
+
